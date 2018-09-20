@@ -50,15 +50,17 @@ posAdd (x1, y1) (x0, y0) = (x1 + x0, y1 + y0)
 posMul2 (x1, y1) (x0, y0) = (x1 * x0, y1 * y0)
 posMul s (x, y) = (s*x, s*y)
 
+evtPos = .clientPos
 
 createMovePicked : Picked -> Mouse.Event -> Msg
-createMovePicked picked {offsetPos} =
+createMovePicked picked evt =
     let
         {selected, wasAt, pickedAt} = picked
+        pos = evtPos evt
     in
         case selected of
-            SelectedNode nodeId -> MoveNode nodeId <| posAdd wasAt <| posMul2 (1, -1) <| posDiff offsetPos pickedAt
-            SelectedPort nodeId _ -> MoveNode nodeId <| posAdd wasAt <| posMul2 (1, -1) <| posDiff offsetPos pickedAt
+            SelectedNode nodeId -> MoveNode nodeId <| posAdd wasAt <| posMul2 (1, -1) <| posDiff pos pickedAt
+            SelectedPort nodeId _ -> MoveNode nodeId <| posAdd wasAt <| posMul2 (1, -1) <| posDiff pos pickedAt
 
 
 --listFind pred list = List.foldl (\elem res -> if pred elem then Just elem else res ) Nothing list
@@ -209,7 +211,7 @@ pickedSubs model =
     case model.picked of
         Just picked ->
             [
-                BE.onMouseUp <| D.map (\{offsetPos} -> if (picked.pickedAt == offsetPos) then Select picked.selected else Drop) Mouse.eventDecoder,
+                BE.onMouseUp <| D.map (\e -> if (picked.pickedAt == evtPos e) then Select picked.selected else Drop) Mouse.eventDecoder,
                 BE.onMouseMove <| D.map (createMovePicked picked) Mouse.eventDecoder
             ]
         Nothing -> []
@@ -249,7 +251,7 @@ renderPort m node {name, off, norm, dir, typ} =
         g 
             [
                 -- onClick <| SelectPort (nodeId, name)
-                Mouse.onDown <| \e -> PickPort node name e.offsetPos
+                Mouse.onDown <| \e -> if e.button == Mouse.MainButton then PickPort node name (evtPos e) else NoOp
             ]
             [circle [cx <| fromFloat ox, cy <| fromFloat oy, r "0.2", stroke "black", strokeWidth <| if selected then "0.1" else "0.05", fill fl] []]
     
@@ -280,7 +282,7 @@ renderNode m node =
             [ transform <| translate at ++ scale 30
             ]
             <| [g
-                    [ Mouse.onDown <| \e -> PickNode node e.offsetPos
+                    [ Mouse.onDown <| \e -> if e.button == Mouse.MainButton then PickNode node (evtPos e) else NoOp
                     , Mouse.onContextMenu <| \e -> SelectNode node.id
                     ] <| renderNodeType flags typ]
             ++ List.map (renderPort m node) (getPorts typ)
