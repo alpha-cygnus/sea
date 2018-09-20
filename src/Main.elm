@@ -11,6 +11,8 @@ import Array exposing (..)
 import String exposing (fromFloat)
 import Json.Decode as D
 import Html.Events.Extra.Mouse as Mouse
+import Pos
+import Menu
 
 port jslog : String -> Cmd msg
 
@@ -44,13 +46,7 @@ translate (x, y) = " translate(" ++ (fromFloat x) ++ "," ++ (fromFloat y) ++ ")"
 scale s = " scale(" ++ (fromFloat s) ++ ")"
 scale2 (sx, sy) = " scale(" ++ (fromFloat sx) ++ "," ++ (fromFloat sy) ++ ")"
 
-
-posDiff (x1, y1) (x0, y0) = (x1 - x0, y1 - y0)
-posAdd (x1, y1) (x0, y0) = (x1 + x0, y1 + y0)
-posMul2 (x1, y1) (x0, y0) = (x1 * x0, y1 * y0)
-posMul s (x, y) = (s*x, s*y)
-
-evtPos = .clientPos
+evtPos = .pagePos
 
 createMovePicked : Picked -> Mouse.Event -> Msg
 createMovePicked picked evt =
@@ -59,8 +55,9 @@ createMovePicked picked evt =
         pos = evtPos evt
     in
         case selected of
-            SelectedNode nodeId -> MoveNode nodeId <| posAdd wasAt <| posMul2 (1, -1) <| posDiff pos pickedAt
-            SelectedPort nodeId _ -> MoveNode nodeId <| posAdd wasAt <| posMul2 (1, -1) <| posDiff pos pickedAt
+            SelectedNode nodeId -> MoveNode nodeId <| Pos.add wasAt <| Pos.mul2 (1, -1) <| Pos.diff pos pickedAt
+            SelectedPort nodeId _ -> MoveNode nodeId <| Pos.add wasAt <| Pos.mul2 (1, -1) <| Pos.diff pos pickedAt
+            SelectedSchema -> NoOp
 
 
 --listFind pred list = List.foldl (\elem res -> if pred elem then Just elem else res ) Nothing list
@@ -80,9 +77,9 @@ fetchPort (nodeId, pname) m =
 
 portCoords ({at}, {off, norm}) =
     let
-        pos = posAdd at <| posMul nodeSize <| posAdd off <| posMul portSize norm
+        pos = Pos.add at <| Pos.mul nodeSize <| Pos.add off <| Pos.mul portSize norm
     in
-        (pos, posAdd pos <| posMul (nodeSize*3) norm)
+        (pos, Pos.add pos <| Pos.mul (nodeSize*3) norm)
 
 ---- MODEL ----
 type LinkType = Audio
@@ -144,6 +141,7 @@ type alias Link =
 type Selection
     = SelectedNode NodeId
     | SelectedPort NodeId PortName
+    | SelectedSchema
 
 type alias Picked = {selected: Selection, wasAt: (Float, Float), pickedAt: (Float, Float) }
 
@@ -153,7 +151,8 @@ type alias Model =
         nodes: List Node,
         links: List Link,
         picked: Maybe Picked,
-        selected: Maybe Selection
+        selected: Maybe Selection,
+        menu: Maybe (Menu.Model Msg)
     }
 
 
@@ -170,7 +169,8 @@ init =
         links =
             [ { from = (1, "out"), to = (2, "freq"), typ = Audio}
             ],
-        selected = Nothing
+        selected = Nothing,
+        menu = Nothing
     }, Cmd.none )
 
 
@@ -186,6 +186,7 @@ type Msg
     | Select Selection
     | SelectNode NodeId
     | SelectPort (NodeId, PortName)
+    | ShowMenu Selection Pos.Pos
     | Unselect
     | Drop
 
@@ -198,10 +199,11 @@ update msg model =
     PickPort {id, at} pn pos -> ({model | picked = Just {selected = SelectedPort id pn, wasAt = at, pickedAt = pos }}, Cmd.none)
     Drop -> ({model | picked = Nothing }, Cmd.none)
     MoveNode nodeId to -> ({model | nodes = List.map (\node -> if node.id == nodeId then {node | at = to} else node) model.nodes}, Cmd.none)
-    Select sel -> ({model | selected = Just sel, picked = Nothing}, Cmd.none)
-    SelectNode mn -> ({model | selected = Just (SelectedNode mn), picked = Nothing}, Cmd.none)
-    SelectPort (nodeId, pn) -> ({model | selected = Just (SelectedPort nodeId pn), picked = Nothing}, Cmd.none)
-    Unselect -> ({model | picked = Nothing, selected = Nothing}, Cmd.none)
+    Select sel -> ({model | selected = Just sel, picked = Nothing, menu = Nothing}, Cmd.none)
+    SelectNode mn -> ({model | selected = Just (SelectedNode mn), picked = Nothing, menu = Nothing}, Cmd.none)
+    SelectPort (nodeId, pn) -> ({model | selected = Just (SelectedPort nodeId pn), picked = Nothing, menu = Nothing}, Cmd.none)
+    Unselect -> ({model | picked = Nothing, selected = Nothing, menu = Nothing}, Cmd.none)
+    ShowMenu sel pos -> ({model | menu = Just <| Menu.init pos <| getMenuItems model sel}, Cmd.none)
     NoOp -> (model, Cmd.none)
 
 
@@ -239,7 +241,7 @@ renderNodeType flags node =
 
 renderPort m node {name, off, norm, dir, typ} =
     let
-        (ox, oy) = posAdd off <| posMul 0.2 norm
+        (ox, oy) = Pos.add off <| Pos.mul 0.2 norm
         nodeId = node.id
         selected = case m.selected of
             Just (SelectedPort n p) -> nodeId == n && name == p
@@ -249,9 +251,8 @@ renderPort m node {name, off, norm, dir, typ} =
             Output -> "red"
     in
         g 
-            [
-                -- onClick <| SelectPort (nodeId, name)
-                Mouse.onDown <| \e -> if e.button == Mouse.MainButton then PickPort node name (evtPos e) else NoOp
+            [ Mouse.onDown <| \e -> if e.button == Mouse.MainButton then PickPort node name (evtPos e) else NoOp
+            , Mouse.onContextMenu <| \e -> ShowMenu (SelectedPort node.id name) (evtPos e)
             ]
             [circle [cx <| fromFloat ox, cy <| fromFloat oy, r "0.2", stroke "black", strokeWidth <| if selected then "0.1" else "0.05", fill fl] []]
     
@@ -283,7 +284,7 @@ renderNode m node =
             ]
             <| [g
                     [ Mouse.onDown <| \e -> if e.button == Mouse.MainButton then PickNode node (evtPos e) else NoOp
-                    , Mouse.onContextMenu <| \e -> SelectNode node.id
+                    , Mouse.onContextMenu <| \e -> ShowMenu (SelectedNode node.id) (evtPos e)
                     ] <| renderNodeType flags typ]
             ++ List.map (renderPort m node) (getPorts typ)
 
@@ -300,19 +301,35 @@ renderLink m {from, to, typ} =
                 ]
         _ -> []
 
+getMenuItems : Model -> Selection -> List (Menu.Item Msg)
+getMenuItems m sel =
+    case sel of
+        SelectedNode nodeId ->
+            [ {caption = "Edit", msg = Unselect}
+            , {caption = "Delete", msg = Unselect}
+            ]
+        SelectedPort _ _ ->
+            [ {caption = "Disconnect all", msg = Unselect}
+            ]
+        SelectedSchema ->
+            [ {caption = "New Osc", msg = Unselect}
+            ]
 
 ---- VIEW ----
 view : Model -> Html Msg
 view model =
-    div []
+    div [] <|
         [ svg [width "800px", height "800px"]
-            [ rect [x "0", y "0", width "800", height "800", fill "white", stroke "black", onClick Unselect] []
+            [ rect [x "0", y "0", width "800", height "800", fill "white", stroke "black"
+            , onClick Unselect
+            , Mouse.onContextMenu <| \e -> ShowMenu (SelectedSchema) (evtPos e)
+            ] []
             , g [transform <| translate(400, 400) ++ scale2(1, -1)]
                 [ List.map (renderLink model) model.links |> List.foldl (++) [] |> g []
                 , List.map (renderNode model) model.nodes |> g []
                 ]
             ]
-        ]
+        ] ++ (Maybe.withDefault [] <| Maybe.map Menu.view model.menu)
 
 
 

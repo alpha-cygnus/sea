@@ -1,7 +1,6 @@
 body {
   font-family: 'Source Sans Pro', 'Trebuchet MS', 'Lucida Grande', 'Bitstream Vera Sans', 'Helvetica Neue', sans-serif;
   margin: 0;
-  text-align: center;
   color: #293c4b;
 }
 
@@ -12,4 +11,18 @@ h1 {
 img {
   margin: 20px 0;
   max-width: 200px;
+}
+
+.menu {
+  background: #EEE;
+  border: 1px solid #888;
+  width: 200px;
+  display: block;
+  position: absolute;
+  box-shadow: 4px 4px 2px 0px rgba(0,0,0,0.75);
+}
+
+.menu .item:hover {
+  background: #F88;
+  cursor: pointer;
 }
